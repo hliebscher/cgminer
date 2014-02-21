@@ -137,6 +137,7 @@ enum sub_ident {
 	IDENT_AMU,
 	IDENT_ANU,
 	IDENT_AVA,
+	IDENT_BA1,
 	IDENT_BAJ,
 	IDENT_BAL,
 	IDENT_BAM,
