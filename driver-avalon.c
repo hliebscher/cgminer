@@ -114,8 +114,15 @@ static int avalon_init_task(struct avalon_task *at,
 
 	/* With 55nm, this is the real clock in Mhz, 1Mhz means 2Mhs */
 	lefreq16 = (uint16_t *)&buf[6];
-	if (asic == AVALON_A3256)
+	if (asic == AVALON_A3256) {
+		if (frequency > 0x3ff) {
+			/* frequency too big for main divider - need to use
+			 * smaller input divider */
+			buf[8] = 0x72;
+			frequency >>= 1;
+		}
 		frequency *= 8;
+	}
 	else
 		frequency = frequency * 32 / 50 + 0x7FE0;
 	*lefreq16 = htole16(frequency);
@@ -774,6 +781,32 @@ static void bitburner_get_version(struct cgpu_info *avalon)
 		info->version2 = buf[1];
 		info->version3 = buf[2];
 	}
+}
+
+static bool bitburner_flush(struct cgpu_info *avalon)
+{
+	struct avalon_info *info = avalon->device_data;
+	int err;
+
+	if (is_bitburner(avalon)) {
+		/* Check for version >= 1.4.0 */
+		if (info->version1 > 1 ||
+		    (info->version1 == 1 && info->version2 >= 4)) {
+			err = usb_transfer(avalon, FTDI_TYPE_OUT,
+					BITBURNER_REQUEST, BITBURNER_VALUE,
+					BITBURNER_INDEX_FLUSH, C_BB_FLUSH);
+			if (unlikely(err < 0)) {
+				applog(LOG_ERR, "%s%i: BitBurnerFlush failed: err = %d",
+					avalon->drv->name, avalon->device_id, err);
+				return false;
+			} else {
+				applog(LOG_WARNING, "%s%i: Issued flush command",
+					avalon->drv->name, avalon->device_id);
+			}
+			return true;
+		}
+	}
+	return false;
 }
 
 static struct cgpu_info *avalon_detect_one(libusb_device *dev, struct usb_find_devices *found)
@@ -1614,6 +1647,8 @@ static void avalon_flush_work(struct cgpu_info *avalon)
 	/* Will overwrite any work queued. Do this unlocked since it's just
 	 * changing a single non-critical value and prevents deadlocks */
 	avalon->queued = 0;
+	if (is_bitburner(avalon))
+		bitburner_flush(avalon);
 
 	/* Signal main loop we need more work */
 	cgsem_post(&info->qsem);
