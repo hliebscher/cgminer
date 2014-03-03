@@ -456,8 +456,8 @@ static struct usb_find_devices find_dev[] = {
 		INTINFO(ava_ints) },
 	{
 		.drv = DRIVER_avalon,
-		.name = "BA1",
-		.ident = IDENT_BA1,
+		.name = "BBA",
+		.ident = IDENT_BBA,
 		.idVendor = IDVENDOR_FTDI,
 		.idProduct = 0x6001,
 		.iManufacturer = "Burnin Electronics",

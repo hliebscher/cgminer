@@ -55,7 +55,7 @@ bool opt_avalon_auto;
 
 static int option_offset = -1;
 static int bbf_option_offset = -1;
-static int ba1_option_offset = -1;
+static int bba_option_offset = -1;
 
 static int avalon_init_task(struct avalon_task *at,
 			    uint8_t reset, uint8_t ff, uint8_t fan,
@@ -707,7 +707,7 @@ static bool is_bitburner(struct cgpu_info *avalon)
 	enum sub_ident ident;
 
 	ident = usb_ident(avalon);
-	return ident == IDENT_BTB || ident == IDENT_BBF || ident == IDENT_BA1;
+	return ident == IDENT_BTB || ident == IDENT_BBF || ident == IDENT_BBA;
 }
 
 static bool bitburner_set_core_voltage(struct cgpu_info *avalon, int core_voltage)
@@ -834,9 +834,9 @@ static struct cgpu_info *avalon_detect_one(libusb_device *dev, struct usb_find_d
 	if (usb_ident(avalon) == IDENT_BBF && opt_bitburner_fury_options != NULL) {
 		this_options = opt_bitburner_fury_options;
 		this_option_offset = ++bbf_option_offset;
-	} else if (usb_ident(avalon) == IDENT_BA1 && opt_bitburner_a1_options != NULL) {
+	} else if (usb_ident(avalon) == IDENT_BBA && opt_bitburner_a1_options != NULL) {
 		this_options = opt_bitburner_a1_options;
-		this_option_offset = ++ba1_option_offset;
+		this_option_offset = ++bba_option_offset;
 	} else {
 		this_options = opt_avalon_options;
 		this_option_offset = ++option_offset;
@@ -874,7 +874,7 @@ static struct cgpu_info *avalon_detect_one(libusb_device *dev, struct usb_find_d
 			info->timeout = BITBURNER_FURY_DEFAULT_TIMEOUT;
 			info->frequency = BITBURNER_FURY_DEFAULT_FREQUENCY;
 			break;
-		case IDENT_BA1:
+		case IDENT_BBA:
 			info->miner_count = BITBURNER_A1_DEFAULT_MINER_NUM;
 			info->timeout = AVALON_DEFAULT_TIMEOUT; // ignored by firmware
 			info->frequency = BITBURNER_A1_DEFAULT_FREQUENCY;
@@ -940,7 +940,7 @@ static struct cgpu_info *avalon_detect_one(libusb_device *dev, struct usb_find_d
 		} else
 			bitburner_set_core_voltage(avalon, opt_bitburner_fury_core_voltage);
 		break;
-	case IDENT_BA1:
+	case IDENT_BBA:
 		if (opt_bitburner_a1_core_voltage < BITBURNER_A1_MIN_COREMV ||
 		    opt_bitburner_a1_core_voltage > BITBURNER_A1_MAX_COREMV) {
 			quit(1, "Invalid bitburner-a1-voltage %d must be %dmv - %dmv",
