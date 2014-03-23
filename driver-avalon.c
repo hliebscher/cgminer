@@ -271,7 +271,7 @@ static int bitburner_send_task(const struct avalon_task *at, struct cgpu_info *a
 	}
 	cgsleep_prepare_r(&ts_start);
 	ret = avalon_write(avalon, (char *)buf, nr_len, ep);
-	cgsleep_us_r(&ts_start, 3000); // 3 ms = 333 tasks per second, or 1.4 TH/s
+	cgsleep_us_r(&ts_start, 2000); // 2 ms = 500 tasks per second, or 2.1 TH/s
 
 	return ret;
 }
@@ -809,6 +809,36 @@ static bool bitburner_flush(struct cgpu_info *avalon)
 	return false;
 }
 
+/* This function assumes that the firmware version check has been done elsewhere */
+static unsigned int bitburner_get_queueable(struct cgpu_info *avalon, bool use_get_queueable)
+{
+	int err;
+	uint8_t buf[2];
+	int amount;
+	unsigned int tasks;
+
+	if (use_get_queueable) {
+		/* "Get number of queueable tasks" command is available */
+		err = usb_transfer_read(avalon, FTDI_TYPE_IN, BITBURNER_REQUEST,
+				BITBURNER_VALUE, BITBURNER_INDEX_GET_QUEUEABLE,
+				(char *)buf, sizeof(buf), &amount,
+				C_BB_GET_QUEUEABLE);
+		if (unlikely(err != 0 || amount != sizeof(buf))) {
+			applog(LOG_DEBUG, "%s%i: GetQueueable failed: err = %d",
+				avalon->drv->name, avalon->device_id, err);
+			return 0;
+		} else {
+			tasks = (unsigned int)(buf[0] + ((unsigned int)buf[1] << 8));
+			applog(LOG_DEBUG, "%s%i: Number of queueable tasks: %d",
+				avalon->drv->name, avalon->device_id, tasks);
+			return tasks;
+		}
+	} else {
+		/* "Get number of queueable tasks" command not available; poll CTS */
+		return avalon_buffer_full(avalon) ? 0 : 1;
+	}
+}
+
 static struct cgpu_info *avalon_detect_one(libusb_device *dev, struct usb_find_devices *found)
 {
 	int baud, miner_count, asic_count, timeout, frequency, asic;
@@ -1307,32 +1337,43 @@ static void *bitburner_send_tasks(void *userdata)
 	struct avalon_info *info = avalon->device_data;
 	const int avalon_get_work_count = info->miner_count;
 	char threadname[16];
+	bool use_get_queueable = false;
+	unsigned int num_queueable = 0;
 
 	snprintf(threadname, sizeof(threadname), "%d/AvaSend", avalon->device_id);
 	RenameThread(threadname);
+
+	/* Check for version >= 1.5.0 */
+	if (info->version1 > 1 || (info->version1 == 1 && info->version2 >= 5))
+		use_get_queueable = true;
 
 	while (likely(!avalon->shutdown)) {
 		int start_count, end_count, i, j, ret;
 		struct avalon_task at;
 		bool idled = false;
 
-		while (avalon_buffer_full(avalon))
-			cgsleep_ms(40);
+		while (num_queueable == 0) {
+			cgsleep_ms(10);
+			num_queueable = bitburner_get_queueable(avalon, use_get_queueable);
+		}
 
 		avalon_adjust_freq(info, avalon);
 
 		/* Give other threads a chance to acquire qlock. */
 		i = 0;
 		do {
-			cgsleep_ms(40);
+			cgsleep_ms(10);
 		} while (!avalon->shutdown && i++ < 15
 			&& avalon->queued < avalon_get_work_count);
 
 		start_count = avalon->work_array * avalon_get_work_count;
 		end_count = start_count + avalon_get_work_count;
 		for (i = start_count, j = 0; i < end_count; i++, j++) {
-			while (avalon_buffer_full(avalon))
-				cgsleep_ms(40);
+			while (num_queueable == 0) {
+				cgsleep_ms(10);
+				num_queueable = bitburner_get_queueable(avalon, use_get_queueable);
+			}
+			num_queueable--;
 
 			mutex_lock(&info->qlock);
 			if (likely(j < avalon->queued && !info->overheat && avalon->works[i])) {
