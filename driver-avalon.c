@@ -271,7 +271,8 @@ static int bitburner_send_task(const struct avalon_task *at, struct cgpu_info *a
 	}
 	cgsleep_prepare_r(&ts_start);
 	ret = avalon_write(avalon, (char *)buf, nr_len, ep);
-	cgsleep_us_r(&ts_start, 2000); // 2 ms = 500 tasks per second, or 2.1 TH/s
+	if (avalon->bitburner_send_delay)
+		cgsleep_us_r(&ts_start, avalon->bitburner_send_delay);
 
 	return ret;
 }
@@ -956,7 +957,7 @@ static struct cgpu_info *avalon_detect_one(libusb_device *dev, struct usb_find_d
 		/* Start fan at max to avoid overheating during initial run-up */
 		info->fan_pwm = AVALON_DEFAULT_FAN_MAX_PWM;
 	} else
-		AVALON_DEFAULT_FAN_MIN_PWM;
+		info->fan_pwm = AVALON_DEFAULT_FAN_MIN_PWM;
 	/* This is for check the temp/fan every 3~4s */
 	info->temp_history_count =
 		(4 / (float)((float)info->timeout * (AVALON_A3256 / info->asic) * ((float)1.67/0x32))) + 1;
@@ -985,6 +986,7 @@ static struct cgpu_info *avalon_detect_one(libusb_device *dev, struct usb_find_d
 
 	switch (usb_ident(avalon)) {
 	case IDENT_BTB:
+		avalon->bitburner_send_delay = 3000;
 		if (opt_bitburner_core_voltage < BITBURNER_MIN_COREMV ||
 		    opt_bitburner_core_voltage > BITBURNER_MAX_COREMV) {
 			quit(1, "Invalid bitburner-voltage %d must be %dmv - %dmv",
@@ -995,6 +997,8 @@ static struct cgpu_info *avalon_detect_one(libusb_device *dev, struct usb_find_d
 			bitburner_set_core_voltage(avalon, opt_bitburner_core_voltage);
 		break;
 	case IDENT_BBF:
+		/* Slowing task rate improves BBF HW error rate */
+		avalon->bitburner_send_delay = 3000;
 		if (opt_bitburner_fury_core_voltage < BITBURNER_FURY_MIN_COREMV ||
 		    opt_bitburner_fury_core_voltage > BITBURNER_FURY_MAX_COREMV) {
 			quit(1, "Invalid bitburner-fury-voltage %d must be %dmv - %dmv",
@@ -1005,6 +1009,7 @@ static struct cgpu_info *avalon_detect_one(libusb_device *dev, struct usb_find_d
 			bitburner_set_core_voltage(avalon, opt_bitburner_fury_core_voltage);
 		break;
 	case IDENT_BBA:
+		avalon->bitburner_send_delay = 0; /* BBA can handle higher task rate */
 		if (opt_bitburner_a1_core_voltage < BITBURNER_A1_MIN_COREMV ||
 		    opt_bitburner_a1_core_voltage > BITBURNER_A1_MAX_COREMV) {
 			quit(1, "Invalid bitburner-a1-voltage %d must be %dmv - %dmv",
@@ -1013,6 +1018,9 @@ static struct cgpu_info *avalon_detect_one(libusb_device *dev, struct usb_find_d
 				BITBURNER_A1_MAX_COREMV);
 		} else
 			bitburner_set_core_voltage(avalon, opt_bitburner_a1_core_voltage);
+		break;
+	default:
+		avalon->bitburner_send_delay = 3000;
 		break;
 	}
 
@@ -1411,8 +1419,9 @@ static void *bitburner_send_tasks(void *userdata)
 		end_count = start_count + avalon_get_work_count;
 		for (i = start_count, j = 0; i < end_count; i++, j++) {
 			while (num_queueable == 0) {
-				cgsleep_ms(10);
 				num_queueable = bitburner_get_queueable(avalon, use_get_queueable);
+				if (!num_queueable)
+					cgsleep_ms(10);
 			}
 			num_queueable--;
 

@@ -434,6 +434,7 @@ struct cgpu_info {
 	int work_array;
 	int queued;
 	int results;
+	int bitburner_send_delay;
 #endif
 #ifdef USE_MODMINER
 	char fpgaid;
