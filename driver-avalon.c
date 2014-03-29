@@ -839,6 +839,36 @@ static unsigned int bitburner_get_queueable(struct cgpu_info *avalon, bool use_g
 	}
 }
 
+static bool bitburner_set_difficulty(struct cgpu_info *avalon, uint16_t difficulty)
+{
+	struct avalon_info *info = avalon->device_data;
+	uint8_t buf[2];
+	int err;
+
+	if (is_bitburner(avalon)) {
+		/* Check for version >= 1.5.0 */
+		if (info->version1 > 1 ||
+		    (info->version1 == 1 && info->version2 >= 5)) {
+			buf[0] = (uint8_t)difficulty;
+			buf[1] = (uint8_t)(difficulty >> 8);
+			err = usb_transfer_data(avalon, FTDI_TYPE_OUT, BITBURNER_REQUEST,
+					BITBURNER_VALUE, BITBURNER_INDEX_SET_DIFFICULTY,
+					(uint32_t *)buf, sizeof(buf), C_BB_SET_DIFFICULTY);
+			if (unlikely(err < 0)) {
+				applog(LOG_ERR, "%s%i: SetDifficulty failed: err = %d",
+					avalon->drv->name, avalon->device_id, err);
+				return false;
+			} else {
+				applog(LOG_WARNING, "%s%i: Miner difficulty set to %d",
+					avalon->drv->name, avalon->device_id,
+					(int)difficulty);
+			}
+			return true;
+		}
+	}
+	return false;
+}
+
 static struct cgpu_info *avalon_detect_one(libusb_device *dev, struct usb_find_devices *found)
 {
 	int baud, miner_count, asic_count, timeout, frequency, asic;
@@ -922,7 +952,11 @@ static struct cgpu_info *avalon_detect_one(libusb_device *dev, struct usb_find_d
 		info->decrement = 1;
 	}
 
-	info->fan_pwm = AVALON_DEFAULT_FAN_MIN_PWM;
+	if (is_bitburner(avalon)) {
+		/* Start fan at max to avoid overheating during initial run-up */
+		info->fan_pwm = AVALON_DEFAULT_FAN_MAX_PWM;
+	} else
+		AVALON_DEFAULT_FAN_MIN_PWM;
 	/* This is for check the temp/fan every 3~4s */
 	info->temp_history_count =
 		(4 / (float)((float)info->timeout * (AVALON_A3256 / info->asic) * ((float)1.67/0x32))) + 1;
@@ -984,6 +1018,10 @@ static struct cgpu_info *avalon_detect_one(libusb_device *dev, struct usb_find_d
 
 	if (is_bitburner(avalon)) {
 		bitburner_get_version(avalon);
+		if (bitburner_set_difficulty(avalon, 1)) {
+			/* Able to set miner difficulty. */
+			avalon->drv->max_diff = 16.0; // limit max diff to lower variance of stats
+		}
 	}
 
 	return avalon;
@@ -1049,8 +1087,10 @@ static void avalon_parse_results(struct cgpu_info *avalon, struct avalon_info *i
 
 			if (avalon_decode_nonce(thr, avalon, info, ar, work)) {
 				mutex_lock(&info->lock);
-				if (!info->nonces++)
+				if (!info->nonces) {
 					gettemp = true;
+				}
+				info->nonces += (uint32_t)work->device_diff;
 				info->auto_nonces++;
 				mutex_unlock(&info->lock);
 			} else if (opt_avalon_auto) {
@@ -1339,6 +1379,7 @@ static void *bitburner_send_tasks(void *userdata)
 	char threadname[16];
 	bool use_get_queueable = false;
 	unsigned int num_queueable = 0;
+	double last_device_diff = 1.0;
 
 	snprintf(threadname, sizeof(threadname), "%d/AvaSend", avalon->device_id);
 	RenameThread(threadname);
@@ -1381,6 +1422,10 @@ static void *bitburner_send_tasks(void *userdata)
 						info->timeout, info->asic_count,
 						info->miner_count, 1, 0, info->frequency, info->asic);
 				avalon_create_task(&at, avalon->works[i]);
+				if (unlikely(last_device_diff != avalon->works[i]->device_diff)) {
+					last_device_diff = avalon->works[i]->device_diff;
+					bitburner_set_difficulty(avalon, (uint16_t)last_device_diff);
+				}
 				info->auto_queued++;
 			} else {
 				int idle_freq = info->frequency;
